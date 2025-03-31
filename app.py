@@ -1,21 +1,18 @@
 from flask import Flask, request, jsonify
 import feedparser
-from googletrans import Translator
+from deep_translator import GoogleTranslator
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新聞/view?type=rss"
-
-# 翻譯工具
-translator = Translator()
 
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
     entries = feed.entries
 
-    # 先篩選出 12 小時內的
-    from datetime import datetime, timedelta
+    # 過濾近 12 小時內的新聞
     now = datetime.utcnow()
     recent_entries = []
     for entry in entries:
@@ -24,7 +21,7 @@ def latest_news():
             if now - published <= timedelta(hours=12):
                 recent_entries.append(entry)
 
-    # 若不足 10 則，補滿
+    # 補滿至 10 則
     if len(recent_entries) < 10:
         recent_entries = entries[:10]
 
@@ -40,7 +37,6 @@ def latest_news():
 
     return jsonify(news_list)
 
-
 @app.route("/get_news")
 def get_news():
     news_id = int(request.args.get("id", 1)) - 1
@@ -51,13 +47,14 @@ def get_news():
         return jsonify({"error": "新聞編號超出範圍"}), 400
 
     entry = entries[news_id]
-    translated = translator.translate(entry.title + "\n\n" + entry.description, dest='zh-tw')
+
+    translated_title = GoogleTranslator(source='auto', target='zh-tw').translate(entry.title)
+    translated_content = GoogleTranslator(source='auto', target='zh-tw').translate(entry.description)
 
     return jsonify({
-        "title": translated.text.split("\n\n")[0],
-        "content": translated.text.split("\n\n")[1] if "\n\n" in translated.text else translated.text
+        "title": translated_title,
+        "content": translated_content
     })
-
 
 @app.route("/")
 def index():
