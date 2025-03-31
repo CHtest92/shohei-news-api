@@ -12,14 +12,14 @@ RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新�
 def home():
     return "Shohei Ohtani News API is running."
 
-# 回傳最近 12 小時內的最多 10 則新聞（不足則補舊新聞）
+# 回傳最近 12 小時內最多 10 則新聞（不足則補舊新聞）
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
     news_list = []
     twelve_hours_ago = datetime.utcnow() - timedelta(hours=12)
 
-    # 先放近 12 小時內的新聞
+    # 優先取近 12 小時內新聞
     for entry in feed.entries:
         if "published_parsed" in entry and entry.published_parsed:
             published_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
@@ -31,7 +31,7 @@ def latest_news():
         if len(news_list) >= 10:
             break
 
-    # 若不足 10 則，再補舊聞
+    # 若不足 10 則 → 補舊聞
     if len(news_list) < 10:
         for entry in feed.entries:
             if len(news_list) >= 10:
@@ -44,7 +44,7 @@ def latest_news():
 
     return jsonify(news_list)
 
-# 根據 id 回傳新聞內容
+# 回傳指定新聞全文
 @app.route("/get_news")
 def get_news():
     try:
