@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 from googletrans import Translator
 
 app = Flask(__name__)
@@ -17,17 +17,12 @@ def translate_title(title):
     except Exception as e:
         return f"(翻譯失敗: {str(e)})"
 
-# 模擬摘要（取前60字）
-def summarize_content(content):
-    plain = content.replace("<br>", "").replace("<p>", "").replace("</p>", "").replace("&nbsp;", "")
-    return plain[:60] + "..."
-
 # 首頁：健康檢查
 @app.route("/")
 def home():
     return "Shohei News API is running"
 
-# 最新新聞列表（含翻譯標題）
+# 原本的最新新聞列表（回傳 6 筆）
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
@@ -44,7 +39,7 @@ def latest_news():
         })
     return jsonify(news_list)
 
-# 指定新聞內容（含翻譯標題與摘要）
+# 單則新聞內容查詢
 @app.route("/get_news")
 def get_news():
     try:
@@ -53,14 +48,10 @@ def get_news():
         if news_id >= len(feed.entries) or news_id < 0:
             return jsonify({"error": "新聞編號超出範圍"})
         entry = feed.entries[news_id]
-
         translated_title = translate_title(entry.title)
-        summary = summarize_content(entry.description)
-
         return jsonify({
             "title": entry.title,
             "translated_title": translated_title,
-            "summary": summary,
             "content": entry.description,
             "link": entry.link,
             "published": datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d %H:%M:%S"),
@@ -68,6 +59,27 @@ def get_news():
         })
     except Exception as e:
         return jsonify({"error": str(e)})
+
+# ✅ 新增：過去 8 小時的新聞（最多 10 筆）
+@app.route("/recent_news")
+def recent_news():
+    feed = feedparser.parse(RSS_URL)
+    cutoff_time = datetime.utcnow() - timedelta(hours=8)
+    recent_list = []
+    for entry in feed.entries:
+        published_time = datetime(*entry.published_parsed[:6])
+        if published_time >= cutoff_time:
+            translated_title = translate_title(entry.title)
+            recent_list.append({
+                "title": entry.title,
+                "translated_title": translated_title,
+                "link": entry.link,
+                "published": published_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "source": entry.get("source", {}).get("title", "來源不明")
+            })
+        if len(recent_list) >= 10:
+            break
+    return jsonify(recent_list)
 
 if __name__ == "__main__":
     app.run(debug=True)
