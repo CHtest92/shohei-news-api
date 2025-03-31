@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 import feedparser
-import hashlib
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
@@ -8,11 +7,11 @@ app = Flask(__name__)
 # Inoreader RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-# 假翻譯：實務可串 GPT API
+# 假翻譯（可以接 GPT 翻譯 API）
 def translate_title(title):
     return title.replace("　", " ").replace("“", "\"").replace("”", "\"")
 
-# 路由：取得最新 10 則新聞（含翻譯標題）
+# 路由：最新 10 則新聞清單（含翻譯標題）
 @app.route("/list_news_with_link")
 def list_news_with_link():
     feed = feedparser.parse(RSS_URL)
@@ -27,7 +26,7 @@ def list_news_with_link():
         })
     return jsonify(news_list)
 
-# 路由：依照 URL 抓取新聞全文
+# 路由：根據網址取得完整新聞內容
 @app.route("/get_news_by_link")
 def get_news_by_link():
     url = request.args.get("url")
@@ -37,17 +36,18 @@ def get_news_by_link():
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
         if entry.link == url:
+            content = getattr(entry, "content", [{"value": entry.get("description", "")}])[0]["value"]
             return jsonify({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
-                "content": entry.description,
+                "content": content,
                 "published": entry.published,
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
     return jsonify({"error": "Article not found"}), 404
 
-# 路由：搜尋新聞（最多 10 筆）
+# 路由：搜尋新聞
 @app.route("/search_news")
 def search_news():
     keyword = request.args.get("keyword", "")
@@ -69,7 +69,7 @@ def search_news():
             break
     return jsonify(results)
 
-# 路由：近 12 小時內新聞（補滿最多 10 則）
+# 路由：近 12 小時內（補滿至 10 則）
 @app.route("/smart_news")
 def smart_news():
     feed = feedparser.parse(RSS_URL)
@@ -91,7 +91,7 @@ def smart_news():
     for entry in feed.entries:
         if len(news_list) >= 10:
             break
-        if not any(item['link'] == entry.link for item in news_list):
+        if not any(item["link"] == entry.link for item in news_list):
             news_list.append({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
@@ -101,7 +101,7 @@ def smart_news():
             })
     return jsonify(news_list)
 
-# 路由：近 12 小時內新聞（最多 10 則，不補滿）
+# 路由：近 12 小時內（不補滿）
 @app.route("/recent_news")
 def recent_news():
     feed = feedparser.parse(RSS_URL)
@@ -124,6 +124,6 @@ def recent_news():
             break
     return jsonify(recent_list)
 
-# 主程式啟動（開發用）
+# 開發模式執行
 if __name__ == '__main__':
     app.run(debug=True)
