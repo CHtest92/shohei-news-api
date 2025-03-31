@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 import feedparser
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -11,7 +12,7 @@ RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新�
 def home():
     return "Shohei News API is running"
 
-# 取得最新六則新聞，包含標題、來源、連結、時間
+# 取得最新六則新聞標題（含發布時間、來源、連結）
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
@@ -21,7 +22,7 @@ def latest_news():
             "id": idx + 1,
             "title": entry.title,
             "link": entry.link,
-            "published": entry.published,
+            "published": datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d %H:%M:%S"),
             "source": entry.get("source", {}).get("title", "來源不明")
         })
     return jsonify(news_list)
@@ -39,7 +40,7 @@ def get_news():
             "title": entry.title,
             "content": entry.description,
             "link": entry.link,
-            "published": entry.published,
+            "published": datetime(*entry.published_parsed[:6]).strftime("%Y-%m-%d %H:%M:%S"),
             "source": entry.get("source", {}).get("title", "來源不明")
         })
     except Exception as e:
