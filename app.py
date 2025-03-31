@@ -11,7 +11,7 @@ RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新�
 def home():
     return "Shohei News API is running"
 
-# 取得最新六則新聞標題
+# 取得最新六則新聞，包含標題、來源、連結、時間
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
@@ -19,7 +19,10 @@ def latest_news():
     for idx, entry in enumerate(feed.entries[:6]):
         news_list.append({
             "id": idx + 1,
-            "title": entry.title
+            "title": entry.title,
+            "link": entry.link,
+            "published": entry.published,
+            "source": entry.get("source", {}).get("title", "來源不明")
         })
     return jsonify(news_list)
 
@@ -34,7 +37,10 @@ def get_news():
         entry = feed.entries[news_id]
         return jsonify({
             "title": entry.title,
-            "content": entry.description
+            "content": entry.description,
+            "link": entry.link,
+            "published": entry.published,
+            "source": entry.get("source", {}).get("title", "來源不明")
         })
     except Exception as e:
         return jsonify({"error": str(e)})
