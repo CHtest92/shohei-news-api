@@ -7,26 +7,27 @@ app = Flask(__name__)
 
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新聞?type=rss"
 
-# 健康檢查首頁
 @app.route("/")
 def home():
     return "Shohei Ohtani News API is running."
 
-# 回傳最近 12 小時內最多 10 則新聞（不足則補舊新聞）
 @app.route("/latest_news")
 def latest_news():
     feed = feedparser.parse(RSS_URL)
-    news_list = []
     twelve_hours_ago = datetime.utcnow() - timedelta(hours=12)
+    news_list = []
 
     # 優先取近 12 小時內新聞
     for entry in feed.entries:
         if "published_parsed" in entry and entry.published_parsed:
-            published_time = datetime.fromtimestamp(time.mktime(entry.published_parsed))
-            if published_time > twelve_hours_ago:
+            published_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed))
+            if published_dt > twelve_hours_ago:
                 news_list.append({
                     "id": len(news_list) + 1,
-                    "title": entry.title
+                    "title": entry.title,
+                    "published": published_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "source": entry.get("source", {}).get("title", "未知來源"),
+                    "link": entry.link
                 })
         if len(news_list) >= 10:
             break
@@ -37,14 +38,17 @@ def latest_news():
             if len(news_list) >= 10:
                 break
             if not any(news["title"] == entry.title for news in news_list):
+                published_dt = datetime.fromtimestamp(time.mktime(entry.published_parsed)) if entry.published_parsed else None
                 news_list.append({
                     "id": len(news_list) + 1,
-                    "title": entry.title
+                    "title": entry.title,
+                    "published": published_dt.strftime("%Y-%m-%d %H:%M:%S") if published_dt else "不明",
+                    "source": entry.get("source", {}).get("title", "未知來源"),
+                    "link": entry.link
                 })
 
     return jsonify(news_list)
 
-# 回傳指定新聞全文
 @app.route("/get_news")
 def get_news():
     try:
