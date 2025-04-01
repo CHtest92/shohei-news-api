@@ -1,34 +1,43 @@
 from flask import Flask, request, jsonify
 import feedparser
 from datetime import datetime, timedelta
+from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 
 # Inoreader RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-# 假翻譯（可接 GPT API）
+# 假翻譯標題
 def translate_title(title):
     return title.replace("　", " ").replace("“", "\"").replace("”", "\"")
 
-# 取得發布時間並轉換格式
+# 翻譯摘要與內容
+def translate(text):
+    try:
+        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
+    except:
+        return text
+
+# 取得發布時間
 def get_published_time(entry):
     try:
         return datetime(*entry.published_parsed[:6])
     except:
         return datetime.utcnow()
 
-# 最新 10 則新聞清單（含翻譯標題、摘要、時間、連結）
+# 最新 10 則新聞清單（含翻譯標題、摘要翻譯、時間、連結）
 @app.route("/list_news_with_link")
 def list_news_with_link():
     feed = feedparser.parse(RSS_URL)
     news_list = []
     for entry in feed.entries[:10]:
-        content = entry.get("summary") or entry.get("description") or ""
+        content = entry.get("summary", "")
         news_list.append({
             "title": entry.title,
             "translated_title": translate_title(entry.title),
             "summary": content,
+            "translated_summary": translate(content),
             "link": entry.link,
             "published": entry.published,
             "source": entry.get("source", {}).get("title", "Unknown")
@@ -44,11 +53,11 @@ def recent_news():
     for entry in feed.entries:
         published = get_published_time(entry)
         if now - published <= timedelta(hours=12):
-            content = entry.get("summary") or entry.get("description") or ""
             news_list.append({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
-                "summary": content,
+                "summary": entry.get("summary", ""),
+                "translated_summary": translate(entry.get("summary", "")),
                 "link": entry.link,
                 "published": entry.published,
                 "source": entry.get("source", {}).get("title", "Unknown")
@@ -67,12 +76,12 @@ def search_news():
     feed = feedparser.parse(RSS_URL)
     results = []
     for entry in feed.entries:
-        content = entry.get("summary") or entry.get("description") or ""
-        if keyword.lower() in entry.title.lower() or keyword.lower() in content.lower():
+        if keyword.lower() in entry.title.lower() or keyword.lower() in entry.get("summary", "").lower():
             results.append({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
-                "summary": content,
+                "summary": entry.get("summary", ""),
+                "translated_summary": translate(entry.get("summary", "")),
                 "link": entry.link,
                 "published": entry.published,
                 "source": entry.get("source", {}).get("title", "Unknown")
@@ -90,13 +99,8 @@ def get_news_by_link():
 
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
-        if url in entry.link or entry.link in url:
-            content = entry.get("summary") or entry.get("description") or ""
-            if not content.strip():
-                return jsonify({
-                    "error": "No content in RSS. Please visit the original link and manually copy the content.",
-                    "link": entry.link
-                }), 404
+        if entry.link == url:
+            content = entry.get("summary", "")
             return jsonify({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
@@ -105,7 +109,7 @@ def get_news_by_link():
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
-    return jsonify({"error": "Article not found", "requested_url": url}), 404
+    return jsonify({"error": "Article not found"}), 404
 
 # 啟動應用
 if __name__ == '__main__':
