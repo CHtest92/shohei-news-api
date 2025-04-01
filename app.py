@@ -133,6 +133,7 @@ def find_article_content(soup):
         {"name": "div", "class_": "article-body"},
         {"name": "div", "class_": "post-content"},
         {"name": "div", "class_": "entry-content"},
+        {"name": "div", "class_": "l-article"},
         {"name": "article"}
     ]
     for c in candidates:
