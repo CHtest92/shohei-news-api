@@ -3,6 +3,7 @@ import feedparser
 from datetime import datetime, timedelta
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -13,7 +14,22 @@ RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%
 def translate_title(title):
     return title.replace("　", " ").replace("“", "\"").replace("”", "\"")
 
-# 最新 10 則新聞清單
+# 網域專屬 selector 配對（可擴充）
+DOMAIN_SELECTOR_MAP = {
+    "full-count.jp": "artL-detail",
+    "sponichi.co.jp": "article-body"
+    # 可繼續擴充其他網站
+}
+
+# 根據網址決定主文選擇器
+def get_domain_selector(url):
+    hostname = urlparse(url).hostname or ""
+    for domain, class_name in DOMAIN_SELECTOR_MAP.items():
+        if domain in hostname:
+            return {"name": "div", "class_": class_name}
+    return None
+
+# RSS 最新新聞清單（10 則）
 @app.route("/list_news_with_link")
 def list_news_with_link():
     feed = feedparser.parse(RSS_URL)
@@ -28,137 +44,39 @@ def list_news_with_link():
         })
     return jsonify(news_list)
 
-# 根據網址取得新聞內容（RSS 內 content 或 description）
-@app.route("/get_news_by_link")
-def get_news_by_link():
-    url = request.args.get("url")
-    if not url:
-        return jsonify({"error": "Missing URL"}), 400
-
-    feed = feedparser.parse(RSS_URL)
-    for entry in feed.entries:
-        if entry.link == url:
-            content = getattr(entry, "content", [{"value": entry.get("description", "")}])[0]["value"]
-            return jsonify({
-                "title": entry.title,
-                "translated_title": translate_title(entry.title),
-                "content": content,
-                "published": entry.published,
-                "source": entry.get("source", {}).get("title", "Unknown"),
-                "link": entry.link
-            })
-    return jsonify({"error": "Article not found"}), 404
-
-# 搜尋新聞（關鍵字）
-@app.route("/search_news")
-def search_news():
-    keyword = request.args.get("keyword", "")
-    if not keyword:
-        return jsonify({"error": "Missing keyword"}), 400
-
-    feed = feedparser.parse(RSS_URL)
-    results = []
-    for entry in feed.entries:
-        if keyword.lower() in entry.title.lower() or keyword.lower() in entry.description.lower():
-            results.append({
-                "title": entry.title,
-                "translated_title": translate_title(entry.title),
-                "link": entry.link,
-                "published": entry.published,
-                "source": entry.get("source", {}).get("title", "Unknown")
-            })
-        if len(results) >= 10:
-            break
-    return jsonify(results)
-
-# 近 12 小時新聞（補滿最多 10 則）
-@app.route("/smart_news")
-def smart_news():
-    feed = feedparser.parse(RSS_URL)
-    news_list = []
-    now = datetime.utcnow()
-    for entry in feed.entries:
-        try:
-            published = datetime(*entry.published_parsed[:6])
-            if now - published <= timedelta(hours=12):
-                news_list.append({
-                    "title": entry.title,
-                    "translated_title": translate_title(entry.title),
-                    "link": entry.link,
-                    "published": entry.published,
-                    "source": entry.get("source", {}).get("title", "Unknown")
-                })
-        except Exception:
-            continue
-    for entry in feed.entries:
-        if len(news_list) >= 10:
-            break
-        if not any(item["link"] == entry.link for item in news_list):
-            news_list.append({
-                "title": entry.title,
-                "translated_title": translate_title(entry.title),
-                "link": entry.link,
-                "published": entry.published,
-                "source": entry.get("source", {}).get("title", "Unknown")
-            })
-    return jsonify(news_list)
-
-# 近 12 小時新聞（不補滿）
-@app.route("/recent_news")
-def recent_news():
-    feed = feedparser.parse(RSS_URL)
-    recent_list = []
-    now = datetime.utcnow()
-    for entry in feed.entries:
-        try:
-            published = datetime(*entry.published_parsed[:6])
-            if now - published <= timedelta(hours=12):
-                recent_list.append({
-                    "title": entry.title,
-                    "translated_title": translate_title(entry.title),
-                    "link": entry.link,
-                    "published": entry.published,
-                    "source": entry.get("source", {}).get("title", "Unknown")
-                })
-        except Exception:
-            continue
-        if len(recent_list) >= 10:
-            break
-    return jsonify(recent_list)
-
-# 輔助函式：多種 selector 嘗試抓取主文區塊
-
-def find_article_content(soup):
-    candidates = [
-        {"name": "div", "class_": "art_box"},
-        {"name": "div", "class_": "article-body"},
-        {"name": "div", "class_": "post-content"},
-        {"name": "div", "class_": "entry-content"},
-        {"name": "div", "class_": "l-article"},
-        {"name": "article"}
-    ]
-    for c in candidates:
-        tag = soup.find(c["name"], class_=c.get("class_"))
-        if tag:
-            return tag
-    return None
-
-# 爬取原始網站全文內容（強化 UA 模擬與 fallback）
+# 根據連結取得原文全文（自動判斷網站主文位置）
 @app.route("/get_full_article")
 def get_full_article():
     url = request.args.get("url")
     if not url:
         return jsonify({"error": "Missing URL"}), 400
-
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "html.parser")
 
-        article = find_article_content(soup)
+        selector = get_domain_selector(url)
+        if selector:
+            article = soup.find(selector["name"], class_=selector["class_"])
+        else:
+            # fallback selectors
+            candidates = [
+                {"name": "div", "class_": "art_box"},
+                {"name": "div", "class_": "article-body"},
+                {"name": "div", "class_": "post-content"},
+                {"name": "div", "class_": "entry-content"},
+                {"name": "div", "class_": "l-article"},
+                {"name": "article"}
+            ]
+            article = None
+            for c in candidates:
+                article = soup.find(c["name"], class_=c.get("class_"))
+                if article:
+                    break
+
         if not article:
             return jsonify({"error": "Article content not found"}), 404
 
@@ -167,10 +85,9 @@ def get_full_article():
 
         text = article.get_text(separator="\n", strip=True)
         return jsonify({"content": text})
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# 啟動應用（開發模式）
+# 啟動應用（本地開發）
 if __name__ == '__main__':
     app.run(debug=True)
