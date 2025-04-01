@@ -143,7 +143,7 @@ def find_article_content(soup):
             return tag
     return None
 
-# 爬取原始網站全文內容（多種容錯 + 模擬 UA）
+# 爬取原始網站全文內容（強化 UA 模擬與 fallback）
 @app.route("/get_full_article")
 def get_full_article():
     url = request.args.get("url")
@@ -152,17 +152,17 @@ def get_full_article():
 
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         }
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(response.content, "html.parser")
 
         article = find_article_content(soup)
         if not article:
             return jsonify({"error": "Article content not found"}), 404
 
-        for tag in article.find_all(["img", "video", "iframe"]):
+        for tag in article.find_all(["img", "video", "iframe", "script", "style"]):
             tag.decompose()
 
         text = article.get_text(separator="\n", strip=True)
