@@ -126,7 +126,22 @@ def recent_news():
             break
     return jsonify(recent_list)
 
-# 爬取原始網站全文內容（加上 User-Agent 模擬）
+# 輔助函式：多種 selector 嘗試抓取主文區塊
+
+def find_article_content(soup):
+    candidates = [
+        {"name": "div", "class_": "article-body"},
+        {"name": "div", "class_": "post-content"},
+        {"name": "div", "class_": "entry-content"},
+        {"name": "article"}
+    ]
+    for c in candidates:
+        tag = soup.find(c["name"], class_=c.get("class_"))
+        if tag:
+            return tag
+    return None
+
+# 爬取原始網站全文內容（多種容錯 + 模擬 UA）
 @app.route("/get_full_article")
 def get_full_article():
     url = request.args.get("url")
@@ -141,7 +156,7 @@ def get_full_article():
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        article = soup.find("div", class_="article-body")
+        article = find_article_content(soup)
         if not article:
             return jsonify({"error": "Article content not found"}), 404
 
