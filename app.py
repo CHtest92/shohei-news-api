@@ -88,7 +88,7 @@ def get_news_by_link():
 
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
-        if entry.link == url:
+        if url in entry.link or entry.link in url:
             content = entry.get("summary", "")
             return jsonify({
                 "title": entry.title,
@@ -98,7 +98,7 @@ def get_news_by_link():
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
-    return jsonify({"error": "Article not found"}), 404
+    return jsonify({"error": "Article not found", "requested_url": url}), 404
 
 # 啟動應用
 if __name__ == '__main__':
