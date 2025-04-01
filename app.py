@@ -130,6 +130,7 @@ def recent_news():
 
 def find_article_content(soup):
     candidates = [
+        {"name": "div", "class_": "art_box"},
         {"name": "div", "class_": "article-body"},
         {"name": "div", "class_": "post-content"},
         {"name": "div", "class_": "entry-content"},
