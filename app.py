@@ -24,7 +24,7 @@ def list_news_with_link():
     feed = feedparser.parse(RSS_URL)
     news_list = []
     for entry in feed.entries[:10]:
-        content = entry.get("summary", "")
+        content = entry.get("summary") or entry.get("description") or ""
         news_list.append({
             "title": entry.title,
             "translated_title": translate_title(entry.title),
@@ -44,10 +44,11 @@ def recent_news():
     for entry in feed.entries:
         published = get_published_time(entry)
         if now - published <= timedelta(hours=12):
+            content = entry.get("summary") or entry.get("description") or ""
             news_list.append({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
-                "summary": entry.get("summary", ""),
+                "summary": content,
                 "link": entry.link,
                 "published": entry.published,
                 "source": entry.get("source", {}).get("title", "Unknown")
@@ -66,11 +67,12 @@ def search_news():
     feed = feedparser.parse(RSS_URL)
     results = []
     for entry in feed.entries:
-        if keyword.lower() in entry.title.lower() or keyword.lower() in entry.get("summary", "").lower():
+        content = entry.get("summary") or entry.get("description") or ""
+        if keyword.lower() in entry.title.lower() or keyword.lower() in content.lower():
             results.append({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
-                "summary": entry.get("summary", ""),
+                "summary": content,
                 "link": entry.link,
                 "published": entry.published,
                 "source": entry.get("source", {}).get("title", "Unknown")
@@ -89,7 +91,12 @@ def get_news_by_link():
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
         if url in entry.link or entry.link in url:
-            content = entry.get("summary", "")
+            content = entry.get("summary") or entry.get("description") or ""
+            if not content.strip():
+                return jsonify({
+                    "error": "No content in RSS. Please visit the original link and manually copy the content.",
+                    "link": entry.link
+                }), 404
             return jsonify({
                 "title": entry.title,
                 "translated_title": translate_title(entry.title),
