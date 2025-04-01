@@ -126,7 +126,7 @@ def recent_news():
             break
     return jsonify(recent_list)
 
-# 爬取原始網站全文內容
+# 爬取原始網站全文內容（加上 User-Agent 模擬）
 @app.route("/get_full_article")
 def get_full_article():
     url = request.args.get("url")
@@ -134,16 +134,17 @@ def get_full_article():
         return jsonify({"error": "Missing URL"}), 400
 
     try:
-        response = requests.get(url, timeout=10)
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+        response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # 嘗試抓取常見新聞主文區塊（例如 Full-Count）
         article = soup.find("div", class_="article-body")
         if not article:
             return jsonify({"error": "Article content not found"}), 404
 
-        # 移除圖片與不必要標籤
         for tag in article.find_all(["img", "video", "iframe"]):
             tag.decompose()
 
