@@ -1,17 +1,19 @@
 from flask import Flask, request, jsonify
 import feedparser
 from datetime import datetime, timedelta
+import requests
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
 # Inoreader RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-# 假翻譯（可以接 GPT 翻譯 API）
+# 假翻譯（可接 GPT API）
 def translate_title(title):
     return title.replace("　", " ").replace("“", "\"").replace("”", "\"")
 
-# 路由：最新 10 則新聞清單（含翻譯標題）
+# 最新 10 則新聞清單
 @app.route("/list_news_with_link")
 def list_news_with_link():
     feed = feedparser.parse(RSS_URL)
@@ -26,7 +28,7 @@ def list_news_with_link():
         })
     return jsonify(news_list)
 
-# 路由：根據網址取得完整新聞內容
+# 根據網址取得新聞內容（RSS 內 content 或 description）
 @app.route("/get_news_by_link")
 def get_news_by_link():
     url = request.args.get("url")
@@ -47,7 +49,7 @@ def get_news_by_link():
             })
     return jsonify({"error": "Article not found"}), 404
 
-# 路由：搜尋新聞
+# 搜尋新聞（關鍵字）
 @app.route("/search_news")
 def search_news():
     keyword = request.args.get("keyword", "")
@@ -69,7 +71,7 @@ def search_news():
             break
     return jsonify(results)
 
-# 路由：近 12 小時內（補滿至 10 則）
+# 近 12 小時新聞（補滿最多 10 則）
 @app.route("/smart_news")
 def smart_news():
     feed = feedparser.parse(RSS_URL)
@@ -101,7 +103,7 @@ def smart_news():
             })
     return jsonify(news_list)
 
-# 路由：近 12 小時內（不補滿）
+# 近 12 小時新聞（不補滿）
 @app.route("/recent_news")
 def recent_news():
     feed = feedparser.parse(RSS_URL)
@@ -124,6 +126,33 @@ def recent_news():
             break
     return jsonify(recent_list)
 
-# 開發模式執行
+# 爬取原始網站全文內容
+@app.route("/get_full_article")
+def get_full_article():
+    url = request.args.get("url")
+    if not url:
+        return jsonify({"error": "Missing URL"}), 400
+
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # 嘗試抓取常見新聞主文區塊（例如 Full-Count）
+        article = soup.find("div", class_="article-body")
+        if not article:
+            return jsonify({"error": "Article content not found"}), 404
+
+        # 移除圖片與不必要標籤
+        for tag in article.find_all(["img", "video", "iframe"]):
+            tag.decompose()
+
+        text = article.get_text(separator="\n", strip=True)
+        return jsonify({"content": text})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 啟動應用（開發模式）
 if __name__ == '__main__':
     app.run(debug=True)
