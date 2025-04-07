@@ -9,30 +9,35 @@ app = Flask(__name__)
 # RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-# 翻譯工具
-translator = GoogleTranslator(source='auto', target='zh-tw')
-
+# 翻譯工具（標題與摘要）
 def translate(text):
     try:
-        return translator.translate(text)
+        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
     except:
         return text
 
-# 轉換 HTML 摘要為純文字摘要（保留段落與換行）
-def clean_summary(summary):
-    soup = BeautifulSoup(summary, 'html.parser')
-    for tag in soup(['img', 'script', 'style']):
-        tag.decompose()
-    return soup.get_text(separator="\n", strip=True)
-
-# 取得發布日期（僅取網站標示的年月日）
-def get_site_publish_date(entry):
+# 擷取網站標示發布日期（YYYY-MM-DD）
+def get_display_date(entry):
     try:
-        dt = datetime(*entry.published_parsed[:6])
-        return dt.strftime("%Y-%m-%d")
+        raw = entry.published_parsed
+        date = datetime(*raw[:3])
+        return date.strftime("%Y-%m-%d")
     except:
-        return ""
+        return "Unknown"
 
+# 清除 HTML 的摘要內容
+def clean_summary(summary):
+    try:
+        soup = BeautifulSoup(summary, "html.parser")
+        for tag in soup.find_all("img"):
+            tag.decompose()
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        return soup.get_text("\n").strip()
+    except:
+        return summary
+
+# 最新新聞（近 12 小時，最多 10 則）
 @app.route("/smart_news")
 def smart_news():
     feed = feedparser.parse(RSS_URL)
@@ -40,8 +45,8 @@ def smart_news():
     result = []
 
     for entry in feed.entries:
-        published_time = datetime(*entry.published_parsed[:6])
-        if (now - published_time).total_seconds() <= 43200:  # 12 小時內
+        published = datetime(*entry.published_parsed[:6])
+        if (now - published).total_seconds() <= 43200:
             summary = clean_summary(entry.get("summary", ""))
             result.append({
                 "title": entry.title,
@@ -49,7 +54,7 @@ def smart_news():
                 "summary": summary,
                 "translated_summary": translate(summary),
                 "link": entry.link,
-                "published": get_site_publish_date(entry),
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
         if len(result) >= 10:
@@ -57,6 +62,7 @@ def smart_news():
 
     return jsonify(result)
 
+# 單篇新聞內容（透過 URL）
 @app.route("/get_news_by_link")
 def get_news_by_link():
     url = request.args.get("url")
@@ -72,13 +78,13 @@ def get_news_by_link():
                 "translated_title": translate(entry.title),
                 "summary": summary,
                 "content": summary,
-                "published": get_site_publish_date(entry),
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
-
     return jsonify({"error": "Article not found", "link": url}), 404
 
+# 關鍵字搜尋（標題與摘要）
 @app.route("/search_news")
 def search_news():
     keyword = request.args.get("keyword", "")
@@ -87,7 +93,6 @@ def search_news():
 
     feed = feedparser.parse(RSS_URL)
     results = []
-
     for entry in feed.entries:
         title = entry.title
         summary = clean_summary(entry.get("summary", ""))
@@ -98,17 +103,18 @@ def search_news():
                 "summary": summary,
                 "translated_summary": translate(summary),
                 "link": entry.link,
-                "published": get_site_publish_date(entry),
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
         if len(results) >= 10:
             break
-
     return jsonify(results)
 
+# 錯誤提示範例（Render 休眠或 timeout）
 @app.errorhandler(500)
 def server_error(e):
     return jsonify({"error": "Render backend may be sleeping. Please try again in 30 seconds."}), 500
 
+# 主程式
 if __name__ == '__main__':
     app.run(debug=True)
