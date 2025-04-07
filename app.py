@@ -1,64 +1,71 @@
 from flask import Flask, request, jsonify
 import feedparser
-from datetime import datetime, timedelta, timezone
-import re
+from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
+# RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
 # 翻譯工具
+translator = GoogleTranslator(source='auto', target='zh-tw')
+
 def translate(text):
     try:
-        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
+        return translator.translate(text)
     except:
         return text
 
-# 清除 HTML，保留段落與換行
-def clean_summary(summary):
-    summary = re.sub(r'<img[^>]*>', '', summary)  # 移除圖片
-    summary = re.sub(r'<br\s*/?>', '\n', summary)  # 換行
-    summary = re.sub(r'</p>', '\n', summary)
-    summary = re.sub(r'<[^>]+>', '', summary)  # 其他標籤
-    return summary.strip()
+def clean_html_summary(summary):
+    soup = BeautifulSoup(summary, "html.parser")
+    # 去除圖片
+    for img in soup.find_all("img"):
+        img.decompose()
+    # 將 <br> 轉為換行
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    # 將 <p> 轉換為段落文字加換行
+    for p in soup.find_all("p"):
+        p.insert_after("\n")
+    return soup.get_text(separator=' ').strip()
 
-# 時間處理
-def get_published_datetime(entry):
+# 取得網站顯示的發布日期（YYYY-MM-DD）
+def get_display_date(entry):
     try:
-        return datetime.strptime(entry.published, '%a, %d %b %Y %H:%M:%S %z')
+        published = entry.published_parsed
+        dt = datetime(*published[:6])
+        return dt.strftime("%Y-%m-%d")
     except:
-        return datetime.now(timezone.utc)
+        return ""
 
-# 最新新聞（近 12 小時、最多 10 則）
+# 近12小時新聞（最多10則）
 @app.route("/smart_news")
 def smart_news():
     feed = feedparser.parse(RSS_URL)
-    now = datetime.now(timezone.utc)
-    result = []
+    now = datetime.utcnow()
+    results = []
 
     for entry in feed.entries:
-        published_dt = get_published_datetime(entry)
-        published_date = published_dt.date().isoformat()  # 僅顯示網站標示日期
-
+        published_dt = datetime(*entry.published_parsed[:6])
         if (now - published_dt).total_seconds() <= 43200:
-            summary = clean_summary(entry.get("summary", ""))
-            result.append({
+            raw_summary = entry.get("summary", "")
+            clean_summary = clean_html_summary(raw_summary)
+            results.append({
                 "title": entry.title,
                 "translated_title": translate(entry.title),
-                "summary": summary,
-                "translated_summary": translate(summary),
+                "summary": clean_summary,
+                "translated_summary": translate(clean_summary),
                 "link": entry.link,
-                "published": published_date,
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
-
-        if len(result) >= 10:
+        if len(results) >= 10:
             break
 
-    return jsonify(result)
+    return jsonify(results)
 
-# 根據連結取得單篇新聞
 @app.route("/get_news_by_link")
 def get_news_by_link():
     url = request.args.get("url")
@@ -68,21 +75,19 @@ def get_news_by_link():
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
         if entry.link == url:
-            summary = clean_summary(entry.get("summary", ""))
-            published_dt = get_published_datetime(entry)
-            published_date = published_dt.date().isoformat()
+            raw_summary = entry.get("summary", "")
+            clean_summary = clean_html_summary(raw_summary)
             return jsonify({
                 "title": entry.title,
                 "translated_title": translate(entry.title),
-                "summary": summary,
-                "content": summary,
-                "published": published_date,
+                "summary": clean_summary,
+                "content": clean_summary,
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
     return jsonify({"error": "Article not found", "link": url}), 404
 
-# 搜尋新聞
 @app.route("/search_news")
 def search_news():
     keyword = request.args.get("keyword", "")
@@ -90,23 +95,28 @@ def search_news():
         return jsonify({"error": "Missing keyword"}), 400
 
     feed = feedparser.parse(RSS_URL)
+    now = datetime.utcnow()
     results = []
+
     for entry in feed.entries:
+        published_dt = datetime(*entry.published_parsed[:6])
+        if (now - published_dt).total_seconds() > 43200:
+            continue
+
         title = entry.title
-        summary = clean_summary(entry.get("summary", ""))
-        if keyword.lower() in title.lower() or keyword.lower() in summary.lower():
-            published_dt = get_published_datetime(entry)
-            published_date = published_dt.date().isoformat()
+        raw_summary = entry.get("summary", "")
+        clean_summary = clean_html_summary(raw_summary)
+
+        if keyword.lower() in title.lower() or keyword.lower() in raw_summary.lower():
             results.append({
                 "title": title,
                 "translated_title": translate(title),
-                "summary": summary,
-                "translated_summary": translate(summary),
+                "summary": clean_summary,
+                "translated_summary": translate(clean_summary),
                 "link": entry.link,
-                "published": published_date,
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
-
         if len(results) >= 10:
             break
 
@@ -114,7 +124,7 @@ def search_news():
 
 @app.errorhandler(500)
 def server_error(e):
-    return jsonify({"error": "Render backend may be sleeping. Please try again in 30 seconds."}), 500
+    return jsonify({"error": "伺服器可能正在喚醒中，請稍候幾秒後再試。"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
