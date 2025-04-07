@@ -42,7 +42,7 @@ def smart_news():
                 "published": published.isoformat(),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
-        if len(result) >= 10:
+        if len(result) >= 6:
             break
 
     return jsonify(result)
