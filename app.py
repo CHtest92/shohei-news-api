@@ -15,7 +15,6 @@ IMG_RE = re.compile(r'<img[^>]*>')
 BR_RE = re.compile(r'<br */?>')
 
 # 翻譯工具
-
 def translate(text):
     try:
         return GoogleTranslator(source='auto', target='zh-CN').translate(text)
@@ -23,7 +22,6 @@ def translate(text):
         return text
 
 # 根據 RSS 預設格式找出「網站頁面」所顯示的日期
-
 def extract_web_date(entry):
     if 'published_parsed' in entry:
         dt = datetime(*entry.published_parsed[:6])
@@ -58,10 +56,7 @@ def smart_news():
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
 
-        if len(result) >= 10:
-            break
-
-    return jsonify(result)
+    return jsonify(result[:10])
 
 # 單篇新聞內容
 @app.route("/get_news_by_link")
