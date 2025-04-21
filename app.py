@@ -1,61 +1,65 @@
-from datetime import datetime, timedelta
+from flask import Flask, jsonify, request
 import feedparser
-from flask import Flask, jsonify
-from pytz import utc
+from datetime import datetime, timedelta
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# 訂閱的大谷翔平新聞 RSS 來源
-RSS_FEEDS = [
-    "https://www3.nhk.or.jp/rss/news/cat0.xml",
-    "https://news.yahoo.co.jp/rss/topics/sports.xml",
-    "https://full-count.jp/feed/",
-    "https://rss.rssad.jp/rss/sports_baseball.xml",
-    "https://feeds.bbci.co.uk/sport/baseball/rss.xml",
-    "https://news.yahoo.com/rss/mlb",
-]
+# 訂閱來源 RSS
+RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新聞?type=rss"
 
-@app.route("/smart_news", methods=["GET"])
+# 工具：移除 HTML 標籤並保留換行文字
+def clean_html(content):
+    soup = BeautifulSoup(content, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for p in soup.find_all("p"):
+        p.insert_after("\n")
+    return soup.get_text(separator="\n").strip()
+
+# 工具：轉換 RSS 時間格式
+def parse_datetime(entry):
+    try:
+        return datetime(*entry.published_parsed[:6])
+    except:
+        return datetime.utcnow()
+
+# API：/smart_news
+@app.route("/smart_news")
 def smart_news():
-    now = datetime.utcnow().replace(tzinfo=utc)
-    news_items = []
-    fallback_mode = False
+    feed = feedparser.parse(RSS_URL)
+    now = datetime.utcnow()
 
-    def fetch_within(hours):
-        cutoff = now - timedelta(hours=hours)
-        items = []
-        for feed_url in RSS_FEEDS:
-            parsed = feedparser.parse(feed_url)
-            for entry in parsed.entries:
-                try:
-                    published = getattr(entry, "published_parsed", None)
-                    if published:
-                        published_dt = datetime(*published[:6], tzinfo=utc)
-                        if published_dt >= cutoff:
-                            items.append({
-                                "title": entry.title,
-                                "summary": entry.get("summary", ""),
-                                "published": published_dt.strftime("%Y-%m-%d"),
-                                "source": parsed.feed.get("title", "Unknown Source"),
-                                "link": entry.link,
-                            })
-                except Exception:
-                    continue
-        return items
+    # 先抓 18 小時內新聞
+    primary_window = timedelta(hours=18)
+    fallback_window = timedelta(hours=36)
 
-    # 先抓 18 小時內
-    news_items = fetch_within(18)
+    news = []
+    for entry in feed.entries:
+        pub_time = parse_datetime(entry)
+        time_diff = now - pub_time
+        if time_diff <= fallback_window:
+            summary = clean_html(entry.get("summary", ""))
+            news.append({
+                "title": entry.title.strip(),
+                "summary": summary[:1000],  # 控制長度
+                "published": pub_time.date().isoformat(),  # 顯示網站日期
+                "source": entry.get("source", {}).get("title", "來源不明"),
+                "link": entry.link
+            })
 
-    # 若不足 3 則，抓取 36 小時內補足
-    if len(news_items) < 3:
-        news_items = fetch_within(36)
-        fallback_mode = True
+    # 篩選近 18 小時新聞
+    recent_news = [n for n in news if (now - datetime.fromisoformat(n["published"])) <= primary_window]
 
-    # 限制最多顯示 10 則
-    news_items = sorted(news_items, key=lambda x: x["published"], reverse=True)[:10]
+    # 若不足 3 則，使用 fallback 資料補滿到 3～5 則
+    result = recent_news if len(recent_news) >= 3 else news[:5]
 
-    response = {"news": news_items, "fallback": fallback_mode}
-    return jsonify(response)
+    return jsonify(result[:10])
+
+# 測試 API 可用性
+@app.route("/")
+def index():
+    return "Shohei News API is running."
 
 if __name__ == "__main__":
     app.run(debug=True)
