@@ -1,62 +1,62 @@
-from datetime import datetime, timedelta
 from flask import Flask, jsonify
 import feedparser
-import html
-import re
+from datetime import datetime, timedelta
+import pytz
 
 app = Flask(__name__)
 
-RSS_FEEDS = [
-    "https://full-count.jp/feed/",
-    "https://news.yahoo.co.jp/rss/media/full-c.xml"
+FEED_URLS = [
+    "https://your-inoreader-filtered-feed-1.xml",
+    "https://your-inoreader-filtered-feed-2.xml"
 ]
 
-KEYWORDS = ["大谷翔平", "shohei ohtani"]
-MAX_ARTICLES = 10
-TIME_WINDOW_HOURS = 18  # 時間拉長至近 18 小時內
-
-def clean_html(text):
-    text = re.sub(r'<img[^>]*>', '', text)  # 移除圖片
-    text = re.sub(r'<br\s*/?>', '\n', text)  # <br> 換行
-    text = re.sub(r'</p>|</div>', '\n', text)  # <p> <div> 段落結尾換行
-    text = re.sub(r'<[^>]+>', '', text)  # 移除其他 HTML 標籤
-    return html.unescape(text).strip()
-
-def contains_keywords(entry):
-    content = (entry.get("title", "") + " " + entry.get("summary", "")).lower()
-    return any(keyword in content for keyword in [k.lower() for k in KEYWORDS])
-
-@app.route("/smart_news", methods=["GET"])
-def smart_news():
-    now = datetime.utcnow()
-    articles = []
-
-    for feed_url in RSS_FEEDS:
-        feed = feedparser.parse(feed_url)
+def parse_entries():
+    all_items = []
+    for url in FEED_URLS:
+        feed = feedparser.parse(url)
         for entry in feed.entries:
-            published = entry.get("published_parsed")
-            if not published:
-                continue
-            published_dt = datetime(*published[:6])
-            if (now - published_dt).total_seconds() > TIME_WINDOW_HOURS * 3600:
-                continue
-            if not contains_keywords(entry):
-                continue
-            title = clean_html(entry.get("title", ""))
-            summary = clean_html(entry.get("summary", ""))
-            published_str = published_dt.strftime("%Y-%m-%d")
-            source = re.sub(r'\s*-\s*.*$', '', entry.get("source", {}).get("title", entry.get("title", "")))
-            link = entry.get("link", "")
-            articles.append({
-                "title": title,
-                "summary": summary,
-                "published": published_str,
-                "source": source,
-                "link": link
-            })
+            published = entry.get("published", "") or entry.get("pubDate", "")
+            item = {
+                "title": entry.title,
+                "summary": entry.summary if "summary" in entry else entry.get("description", ""),
+                "published": published,
+                "link": entry.link,
+                "source": entry.get("source", {}).get("title") or feed.feed.get("title") or "未知來源"
+            }
+            # 嘗試解析時間
+            try:
+                item["published_parsed"] = datetime(*entry.published_parsed[:6], tzinfo=pytz.utc)
+            except:
+                item["published_parsed"] = datetime.now(pytz.utc)
+            all_items.append(item)
+    return all_items
 
-    articles = sorted(articles, key=lambda x: x["published"], reverse=True)
-    return jsonify(articles[:MAX_ARTICLES])
+@app.route("/smart_news")
+def smart_news():
+    now = datetime.now(pytz.utc)
+    all_items = parse_entries()
+
+    recent_items = []
+    for item in all_items:
+        time_diff = now - item["published_parsed"]
+        if time_diff <= timedelta(hours=18):
+            recent_items.append(item)
+
+    result = recent_items[:10]
+    fallback = False
+
+    if not result:
+        result = all_items[:5]
+        fallback = True
+
+    return jsonify({
+        "news": result,
+        "fallback": fallback
+    })
+
+@app.route("/")
+def index():
+    return "Shohei News API running."
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run()
