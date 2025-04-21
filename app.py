@@ -1,85 +1,61 @@
-from flask import Flask, jsonify, request
-import feedparser
 from datetime import datetime, timedelta
-from deep_translator import GoogleTranslator
+import feedparser
+from flask import Flask, jsonify
+from pytz import utc
 
 app = Flask(__name__)
 
-# RSS 訂閱來源（大谷翔平相關）
-RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
+# 訂閱的大谷翔平新聞 RSS 來源
+RSS_FEEDS = [
+    "https://www3.nhk.or.jp/rss/news/cat0.xml",
+    "https://news.yahoo.co.jp/rss/topics/sports.xml",
+    "https://full-count.jp/feed/",
+    "https://rss.rssad.jp/rss/sports_baseball.xml",
+    "https://feeds.bbci.co.uk/sport/baseball/rss.xml",
+    "https://news.yahoo.com/rss/mlb",
+]
 
-# 翻譯工具（僅摘要與標題用）
-def translate(text):
-    try:
-        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
-    except:
-        return text
-
-# 擷取 RSS 的發佈時間（保留原始網站標示日期）
-def get_entry_date(entry):
-    try:
-        return datetime(*entry.published_parsed[:6])
-    except:
-        return datetime.utcnow()
-
-# 擷取 RSS 項目中網站標示日期（只取年月日）
-def get_entry_date_str(entry):
-    try:
-        dt = datetime(*entry.published_parsed[:6])
-        return dt.strftime("%Y-%m-%d")
-    except:
-        return datetime.utcnow().strftime("%Y-%m-%d")
-
-# 清理 HTML 摘要，保留文字、換行
-from bs4 import BeautifulSoup
-
-def clean_summary(summary):
-    soup = BeautifulSoup(summary, "html.parser")
-    for br in soup.find_all("br"):
-        br.replace_with("\n")
-    return soup.get_text().strip()
-
-@app.route("/smart_news")
+@app.route("/smart_news", methods=["GET"])
 def smart_news():
-    feed = feedparser.parse(RSS_URL)
-    now = datetime.utcnow()
-    result = []
+    now = datetime.utcnow().replace(tzinfo=utc)
+    news_items = []
+    fallback_mode = False
 
-    # 先抓近 18 小時內的新聞
-    for entry in feed.entries:
-        published_time = get_entry_date(entry)
-        if (now - published_time).total_seconds() <= 64800:  # 18 小時
-            summary = clean_summary(entry.get("summary", ""))
-            result.append({
-                "title": translate(entry.title),
-                "summary": translate(summary),
-                "published": get_entry_date_str(entry),
-                "source": entry.get("source", {}).get("title", "Unknown"),
-                "link": entry.link
-            })
-        if len(result) >= 10:
-            break
+    def fetch_within(hours):
+        cutoff = now - timedelta(hours=hours)
+        items = []
+        for feed_url in RSS_FEEDS:
+            parsed = feedparser.parse(feed_url)
+            for entry in parsed.entries:
+                try:
+                    published = getattr(entry, "published_parsed", None)
+                    if published:
+                        published_dt = datetime(*published[:6], tzinfo=utc)
+                        if published_dt >= cutoff:
+                            items.append({
+                                "title": entry.title,
+                                "summary": entry.get("summary", ""),
+                                "published": published_dt.strftime("%Y-%m-%d"),
+                                "source": parsed.feed.get("title", "Unknown Source"),
+                                "link": entry.link,
+                            })
+                except Exception:
+                    continue
+        return items
 
-    # 如果不足 3 則，擴展到 36 小時內補滿到 5 則
-    if len(result) < 3:
-        for entry in feed.entries:
-            if entry.link in [r["link"] for r in result]:
-                continue
-            published_time = get_entry_date(entry)
-            if (now - published_time).total_seconds() <= 129600:  # 36 小時
-                summary = clean_summary(entry.get("summary", ""))
-                result.append({
-                    "title": translate(entry.title),
-                    "summary": translate(summary),
-                    "published": get_entry_date_str(entry),
-                    "source": entry.get("source", {}).get("title", "Unknown"),
-                    "link": entry.link
-                })
-            if len(result) >= 5:
-                break
+    # 先抓 18 小時內
+    news_items = fetch_within(18)
 
-    return jsonify(result)
+    # 若不足 3 則，抓取 36 小時內補足
+    if len(news_items) < 3:
+        news_items = fetch_within(36)
+        fallback_mode = True
 
-# 主程式
-if __name__ == '__main__':
+    # 限制最多顯示 10 則
+    news_items = sorted(news_items, key=lambda x: x["published"], reverse=True)[:10]
+
+    response = {"news": news_items, "fallback": fallback_mode}
+    return jsonify(response)
+
+if __name__ == "__main__":
     app.run(debug=True)
