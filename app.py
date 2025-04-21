@@ -1,84 +1,62 @@
-from flask import Flask, request, jsonify
-import feedparser
 from datetime import datetime, timedelta
+from flask import Flask, jsonify
+import feedparser
+import html
 import re
-from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# RSS 來源
-RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/大谷翔平新聞?type=rss"
+RSS_FEEDS = [
+    "https://full-count.jp/feed/",
+    "https://news.yahoo.co.jp/rss/media/full-c.xml"
+]
 
-# 移除 HTML 標籤，保留純文字
+KEYWORDS = ["大谷翔平", "shohei ohtani"]
+MAX_ARTICLES = 10
+TIME_WINDOW_HOURS = 18  # 時間拉長至近 18 小時內
+
 def clean_html(text):
-    if not text:
-        return ""
-    soup = BeautifulSoup(text, "html.parser")
-    return soup.get_text(separator="\n").strip()
+    text = re.sub(r'<img[^>]*>', '', text)  # 移除圖片
+    text = re.sub(r'<br\s*/?>', '\n', text)  # <br> 換行
+    text = re.sub(r'</p>|</div>', '\n', text)  # <p> <div> 段落結尾換行
+    text = re.sub(r'<[^>]+>', '', text)  # 移除其他 HTML 標籤
+    return html.unescape(text).strip()
 
-# 判斷是否包含關鍵字（標題或內文）
-def contains_keywords(title, summary):
-    text = (title + " " + summary).lower()
-    return "大谷翔平" in text or "shohei ohtani" in text
+def contains_keywords(entry):
+    content = (entry.get("title", "") + " " + entry.get("summary", "")).lower()
+    return any(keyword in content for keyword in [k.lower() for k in KEYWORDS])
 
-# 網站標示的日期（取自 published 的年月日部分）
-def extract_pubdate(entry):
-    try:
-        return datetime(*entry.published_parsed[:6]).date().isoformat()
-    except:
-        return "日期未知"
-
-@app.route("/smart_news")
+@app.route("/smart_news", methods=["GET"])
 def smart_news():
-    feed = feedparser.parse(RSS_URL)
     now = datetime.utcnow()
-    result = []
+    articles = []
 
-    for entry in feed.entries:
-        try:
-            published = datetime(*entry.published_parsed[:6])
-        except:
-            continue
-
-        if (now - published).total_seconds() > 64800:  # 18 小時
-            continue
-
-        title = entry.title
-        summary = clean_html(entry.get("summary", ""))
-        if contains_keywords(title, summary):
-            result.append({
-                "translated_title": title,  # 預設已翻譯
-                "translated_summary": summary,
-                "published_date": extract_pubdate(entry),
-                "source": entry.get("source", {}).get("title", "Unknown"),
-                "link": entry.link
+    for feed_url in RSS_FEEDS:
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries:
+            published = entry.get("published_parsed")
+            if not published:
+                continue
+            published_dt = datetime(*published[:6])
+            if (now - published_dt).total_seconds() > TIME_WINDOW_HOURS * 3600:
+                continue
+            if not contains_keywords(entry):
+                continue
+            title = clean_html(entry.get("title", ""))
+            summary = clean_html(entry.get("summary", ""))
+            published_str = published_dt.strftime("%Y-%m-%d")
+            source = re.sub(r'\s*-\s*.*$', '', entry.get("source", {}).get("title", entry.get("title", "")))
+            link = entry.get("link", "")
+            articles.append({
+                "title": title,
+                "summary": summary,
+                "published": published_str,
+                "source": source,
+                "link": link
             })
 
-        if len(result) >= 10:
-            break
+    articles = sorted(articles, key=lambda x: x["published"], reverse=True)
+    return jsonify(articles[:MAX_ARTICLES])
 
-    # 若無符合新聞，也回傳 3～5 則以防畫面空白
-    if not result:
-        fallback = []
-        for entry in feed.entries[:5]:
-            fallback.append({
-                "translated_title": entry.title,
-                "translated_summary": clean_html(entry.get("summary", "")),
-                "published_date": extract_pubdate(entry),
-                "source": entry.get("source", {}).get("title", "Unknown"),
-                "link": entry.link
-            })
-        return jsonify({
-            "warning": "以下新聞可能僅部分與大谷翔平相關，請自行判斷",
-            "articles": fallback
-        })
-
-    return jsonify(result)
-
-@app.errorhandler(500)
-def server_error(e):
-    return jsonify({"error": "後端伺服器可能尚在預熱中，請稍候再試"}), 500
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(debug=True)
-
