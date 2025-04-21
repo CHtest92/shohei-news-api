@@ -2,33 +2,36 @@ from flask import Flask, request, jsonify
 import feedparser
 from datetime import datetime, timedelta
 from deep_translator import GoogleTranslator
-import re
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
 # RSS 來源
 RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-# HTML 清理
-TAG_RE = re.compile(r'<[^>]+>')
-IMG_RE = re.compile(r'<img[^>]*>')
-BR_RE = re.compile(r'<br */?>')
-
-# 翻譯工具
+# 翻譯工具（標題與摘要）
 def translate(text):
     try:
-        return GoogleTranslator(source='auto', target='zh-CN').translate(text)
+        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
     except:
         return text
 
-# 根據 RSS 預設格式找出「網站頁面」所顯示的日期
-def extract_web_date(entry):
-    if 'published_parsed' in entry:
-        dt = datetime(*entry.published_parsed[:6])
-        return dt.strftime('%Y-%m-%d')
-    return ""
+# 清除 HTML 並保留段落與換行
+def clean_html(raw_html):
+    soup = BeautifulSoup(raw_html, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    return soup.get_text("\n", strip=True)
 
-# 新聞清單
+# 發布日期（網站顯示為主）
+def get_display_date(entry):
+    try:
+        pub_date = datetime(*entry.published_parsed[:6])
+        return pub_date.strftime("%Y-%m-%d")
+    except:
+        return ""
+
+# 最新新聞（近 12 小時，最多 10 則）
 @app.route("/smart_news")
 def smart_news():
     feed = feedparser.parse(RSS_URL)
@@ -36,29 +39,23 @@ def smart_news():
     result = []
 
     for entry in feed.entries:
-        if 'published_parsed' not in entry:
-            continue
-
-        published_dt = datetime(*entry.published_parsed[:6])
-        if (now - published_dt).total_seconds() <= 43200:  # 12 小時
-            summary = entry.get("summary", "")
-            summary = BR_RE.sub('\n', summary)
-            summary = IMG_RE.sub('', summary)
-            summary = TAG_RE.sub('', summary)
-
+        published_time = datetime(*entry.published_parsed[:6])
+        if (now - published_time).total_seconds() <= 43200:
+            summary_raw = entry.get("summary", "")
+            summary_clean = clean_html(summary_raw)
             result.append({
-                "title": entry.title,
                 "translated_title": translate(entry.title),
-                "summary": summary,
-                "translated_summary": translate(summary[:500]),
+                "translated_summary": translate(summary_clean),
                 "link": entry.link,
-                "published": extract_web_date(entry),
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
+        if len(result) >= 10:
+            break
 
-    return jsonify(result[:10])
+    return jsonify(result)
 
-# 單篇新聞內容
+# 指定新聞全文
 @app.route("/get_news_by_link")
 def get_news_by_link():
     url = request.args.get("url")
@@ -68,24 +65,19 @@ def get_news_by_link():
     feed = feedparser.parse(RSS_URL)
     for entry in feed.entries:
         if entry.link == url:
-            content = entry.get("summary", "")
-            content = BR_RE.sub('\n', content)
-            content = IMG_RE.sub('', content)
-            content = TAG_RE.sub('', content)
-
+            summary = clean_html(entry.get("summary", ""))
             return jsonify({
                 "title": entry.title,
                 "translated_title": translate(entry.title),
-                "summary": content,
-                "content": content,
-                "published": extract_web_date(entry),
+                "summary": summary,
+                "content": summary,
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown"),
                 "link": entry.link
             })
-
     return jsonify({"error": "Article not found", "link": url}), 404
 
-# 關鍵字搜尋
+# 搜尋新聞
 @app.route("/search_news")
 def search_news():
     keyword = request.args.get("keyword", "")
@@ -96,29 +88,22 @@ def search_news():
     results = []
     for entry in feed.entries:
         title = entry.title
-        summary = entry.get("summary", "")
+        summary = clean_html(entry.get("summary", ""))
         if keyword.lower() in title.lower() or keyword.lower() in summary.lower():
-            summary = BR_RE.sub('\n', summary)
-            summary = IMG_RE.sub('', summary)
-            summary = TAG_RE.sub('', summary)
-
             results.append({
-                "title": title,
                 "translated_title": translate(title),
-                "summary": summary,
-                "translated_summary": translate(summary[:500]),
+                "translated_summary": translate(summary),
                 "link": entry.link,
-                "published": extract_web_date(entry),
+                "published": get_display_date(entry),
                 "source": entry.get("source", {}).get("title", "Unknown")
             })
         if len(results) >= 10:
             break
-
     return jsonify(results)
 
 @app.errorhandler(500)
 def server_error(e):
-    return jsonify({"error": "Server error, please try again later."}), 500
+    return jsonify({"error": "Render backend may be sleeping. Please try again in 30 seconds."}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
