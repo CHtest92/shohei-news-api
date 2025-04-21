@@ -1,62 +1,85 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import feedparser
 from datetime import datetime, timedelta
-import pytz
+from deep_translator import GoogleTranslator
 
 app = Flask(__name__)
 
-FEED_URLS = [
-    "https://your-inoreader-filtered-feed-1.xml",
-    "https://your-inoreader-filtered-feed-2.xml"
-]
+# RSS 訂閱來源（大谷翔平相關）
+RSS_URL = "https://www.inoreader.com/stream/user/1003787482/tag/%E5%A4%A7%E8%B0%B7%E7%BF%94%E5%B9%B3%E6%96%B0%E8%81%9E?type=rss"
 
-def parse_entries():
-    all_items = []
-    for url in FEED_URLS:
-        feed = feedparser.parse(url)
-        for entry in feed.entries:
-            published = entry.get("published", "") or entry.get("pubDate", "")
-            item = {
-                "title": entry.title,
-                "summary": entry.summary if "summary" in entry else entry.get("description", ""),
-                "published": published,
-                "link": entry.link,
-                "source": entry.get("source", {}).get("title") or feed.feed.get("title") or "未知來源"
-            }
-            # 嘗試解析時間
-            try:
-                item["published_parsed"] = datetime(*entry.published_parsed[:6], tzinfo=pytz.utc)
-            except:
-                item["published_parsed"] = datetime.now(pytz.utc)
-            all_items.append(item)
-    return all_items
+# 翻譯工具（僅摘要與標題用）
+def translate(text):
+    try:
+        return GoogleTranslator(source='auto', target='zh-tw').translate(text)
+    except:
+        return text
+
+# 擷取 RSS 的發佈時間（保留原始網站標示日期）
+def get_entry_date(entry):
+    try:
+        return datetime(*entry.published_parsed[:6])
+    except:
+        return datetime.utcnow()
+
+# 擷取 RSS 項目中網站標示日期（只取年月日）
+def get_entry_date_str(entry):
+    try:
+        dt = datetime(*entry.published_parsed[:6])
+        return dt.strftime("%Y-%m-%d")
+    except:
+        return datetime.utcnow().strftime("%Y-%m-%d")
+
+# 清理 HTML 摘要，保留文字、換行
+from bs4 import BeautifulSoup
+
+def clean_summary(summary):
+    soup = BeautifulSoup(summary, "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    return soup.get_text().strip()
 
 @app.route("/smart_news")
 def smart_news():
-    now = datetime.now(pytz.utc)
-    all_items = parse_entries()
+    feed = feedparser.parse(RSS_URL)
+    now = datetime.utcnow()
+    result = []
 
-    recent_items = []
-    for item in all_items:
-        time_diff = now - item["published_parsed"]
-        if time_diff <= timedelta(hours=18):
-            recent_items.append(item)
+    # 先抓近 18 小時內的新聞
+    for entry in feed.entries:
+        published_time = get_entry_date(entry)
+        if (now - published_time).total_seconds() <= 64800:  # 18 小時
+            summary = clean_summary(entry.get("summary", ""))
+            result.append({
+                "title": translate(entry.title),
+                "summary": translate(summary),
+                "published": get_entry_date_str(entry),
+                "source": entry.get("source", {}).get("title", "Unknown"),
+                "link": entry.link
+            })
+        if len(result) >= 10:
+            break
 
-    result = recent_items[:10]
-    fallback = False
+    # 如果不足 3 則，擴展到 36 小時內補滿到 5 則
+    if len(result) < 3:
+        for entry in feed.entries:
+            if entry.link in [r["link"] for r in result]:
+                continue
+            published_time = get_entry_date(entry)
+            if (now - published_time).total_seconds() <= 129600:  # 36 小時
+                summary = clean_summary(entry.get("summary", ""))
+                result.append({
+                    "title": translate(entry.title),
+                    "summary": translate(summary),
+                    "published": get_entry_date_str(entry),
+                    "source": entry.get("source", {}).get("title", "Unknown"),
+                    "link": entry.link
+                })
+            if len(result) >= 5:
+                break
 
-    if not result:
-        result = all_items[:5]
-        fallback = True
+    return jsonify(result)
 
-    return jsonify({
-        "news": result,
-        "fallback": fallback
-    })
-
-@app.route("/")
-def index():
-    return "Shohei News API running."
-
-if __name__ == "__main__":
-    app.run()
+# 主程式
+if __name__ == '__main__':
+    app.run(debug=True)
